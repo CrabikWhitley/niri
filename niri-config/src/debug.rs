@@ -27,6 +27,7 @@ pub struct Debug {
     pub skip_cursor_only_updates_during_vrr: bool,
     pub disable_10bit_output: bool,
     pub nested_show_host_cursor: bool,
+    pub disable_render_deadline: bool,
 }
 
 #[derive(knuffel::Decode, Debug, Default, PartialEq)]
@@ -77,6 +78,8 @@ pub struct DebugPart {
     pub disable_10bit_output: Option<Flag>,
     #[knuffel(child)]
     pub nested_show_host_cursor: Option<Flag>,
+    #[knuffel(child)]
+    pub disable_render_deadline: Option<Flag>,
 }
 
 impl MergeWith<DebugPart> for Debug {
@@ -103,6 +106,7 @@ impl MergeWith<DebugPart> for Debug {
             skip_cursor_only_updates_during_vrr,
             disable_10bit_output,
             nested_show_host_cursor,
+            disable_render_deadline,
         );
 
         merge_clone_opt!((self, part), preview_render, render_drm_device);

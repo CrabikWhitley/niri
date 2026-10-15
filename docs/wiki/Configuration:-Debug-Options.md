@@ -36,6 +36,7 @@ debug {
     deactivate-unfocused-windows
     disable-10bit-output
     nested-show-host-cursor
+    disable-render-deadline
 }
 
 binds {
@@ -356,6 +357,23 @@ Until this is fixed in Smithay, you can disable 10-bit color formats by setting 
 ```kdl
 debug {
     disable-10bit-output
+}
+```
+
+### `disable-render-deadline`
+
+<sup>Since: next release</sup>
+
+Render frames as soon as something changes, instead of just before the next vblank.
+
+By default, niri renders as late as it can while still making the next vblank, so that commits arriving in the meantime (e.g. a terminal answering a keypress while another window is animating) make it into the same frame.
+The time it leaves for rendering adapts to missed vblanks.
+This flag restores rendering right away, for example to check whether it causes dropped frames on your hardware.
+It has no effect on VRR outputs, which always render right away.
+
+```kdl
+debug {
+    disable-render-deadline
 }
 ```
 
