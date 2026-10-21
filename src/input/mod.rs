@@ -1065,7 +1065,11 @@ impl State {
             }
             Action::CloseWindowById(id) => {
                 let window = self.niri.layout.windows().find(|(_, m)| m.id().get() == id);
-                if let Some((_, mapped)) = window {
+                let window = window.map(|(_, m)| m).or_else(|| {
+                    let mut minimized = self.niri.layout.minimized_windows();
+                    minimized.find(|m| m.id().get() == id)
+                });
+                if let Some(mapped) = window {
                     mapped.toplevel().send_close();
                 }
             }
@@ -1076,6 +1080,19 @@ impl State {
             Action::SetBackgroundFps(fps, output) => {
                 self.niri.set_background_fps(fps, output);
                 self.niri.queue_redraw_all();
+            }
+            Action::MinimizeWindow => {
+                let focus = self.niri.layout.focus().map(|m| m.window.clone());
+                if let Some(window) = focus {
+                    self.minimize_window(&window);
+                }
+            }
+            Action::MinimizeWindowById(id) => {
+                let window = self.niri.layout.windows().find(|(_, m)| m.id().get() == id);
+                let window = window.map(|(_, m)| m.window.clone());
+                if let Some(window) = window {
+                    self.minimize_window(&window);
+                }
             }
             Action::FullscreenWindow => {
                 let focus = self.niri.layout.focus().map(|m| m.window.clone());
@@ -1116,6 +1133,14 @@ impl State {
                 let window = window.map(|(_, m)| m.window.clone());
                 if let Some(window) = window {
                     self.focus_window(&window);
+                } else {
+                    // A minimized window comes back focused.
+                    let window = (self.niri.layout.minimized_windows())
+                        .find(|m| m.id().get() == id)
+                        .map(|m| m.window.clone());
+                    if let Some(window) = window {
+                        self.unminimize_window(&window, true);
+                    }
                 }
             }
             Action::FocusWindowInColumn(index) => {

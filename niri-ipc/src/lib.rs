@@ -345,6 +345,15 @@ pub enum Action {
         #[serde(default)]
         output: Option<String>,
     },
+    /// Minimize a window: take it out of the layout until it is focused again.
+    #[cfg_attr(feature = "clap", clap(about = "Minimize the focused window"))]
+    MinimizeWindow {
+        /// Id of the window to minimize.
+        ///
+        /// If `None`, uses the focused window.
+        #[cfg_attr(feature = "clap", arg(long))]
+        id: Option<u64>,
+    },
     /// Toggle fullscreen on a window.
     #[cfg_attr(
         feature = "clap",
@@ -1422,6 +1431,11 @@ pub struct Window {
     pub is_floating: bool,
     /// Whether this window requests your attention.
     pub is_urgent: bool,
+    /// Whether this window is minimized (angel-niri).
+    ///
+    /// A minimized window is out of the layout: it has no workspace. Focusing it brings it back.
+    #[serde(default)]
+    pub is_minimized: bool,
     /// Position- and size-related properties of the window.
     pub layout: WindowLayout,
     /// Timestamp when the window was most recently focused.

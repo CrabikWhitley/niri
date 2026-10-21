@@ -246,6 +246,12 @@ pub trait LayoutElement {
 
     fn is_urgent(&self) -> bool;
 
+    /// angel-niri: tells the window it is minimized (out of the layout) or back.
+    fn set_minimized(&mut self, _minimized: bool) {}
+    fn is_minimized(&self) -> bool {
+        false
+    }
+
     fn configure_intent(&self) -> ConfigureIntent;
     fn send_pending_configure(&mut self);
 
@@ -358,6 +364,8 @@ pub struct Layout<W: LayoutElement> {
     last_active_workspace_id: HashMap<String, WorkspaceId>,
     /// Ongoing interactive move.
     interactive_move: Option<InteractiveMoveState<W>>,
+    /// angel-niri: minimized windows, out of the monitors, oldest first.
+    minimized: Vec<MinimizedWindow<W>>,
     /// Ongoing drag-and-drop operation.
     dnd: Option<DndData<W>>,
     /// Clock for driving animations.
@@ -496,6 +504,7 @@ pub enum ConfigureIntent {
 }
 
 /// Tile that was just removed from the layout.
+#[derive(Debug)]
 pub struct RemovedTile<W: LayoutElement> {
     tile: Tile<W>,
     /// Width of the column the tile was in.
@@ -504,6 +513,16 @@ pub struct RemovedTile<W: LayoutElement> {
     is_full_width: bool,
     /// Whether the tile was floating.
     is_floating: bool,
+}
+
+/// angel-niri: a minimized window and where it was.
+#[derive(Debug)]
+struct MinimizedWindow<W: LayoutElement> {
+    removed: RemovedTile<W>,
+    output_name: Option<String>,
+    workspace_id: WorkspaceId,
+    /// Its column in the scrolling layout; `None` when it was floating.
+    column_idx: Option<usize>,
 }
 
 /// Whether to activate a newly added window.
@@ -723,6 +742,7 @@ impl<W: LayoutElement> Layout<W> {
             is_active: true,
             last_active_workspace_id: HashMap::new(),
             interactive_move: None,
+            minimized: Vec::new(),
             dnd: None,
             clock,
             update_render_elements_time: Duration::ZERO,
@@ -748,6 +768,7 @@ impl<W: LayoutElement> Layout<W> {
             is_active: true,
             last_active_workspace_id: HashMap::new(),
             interactive_move: None,
+            minimized: Vec::new(),
             dnd: None,
             clock,
             update_render_elements_time: Duration::ZERO,
@@ -1157,6 +1178,12 @@ impl<W: LayoutElement> Layout<W> {
         window: &W::Id,
         transaction: Transaction,
     ) -> Option<RemovedTile<W>> {
+        if let Some(idx) = self.minimized_idx(window) {
+            let mut removed = self.minimized.remove(idx).removed;
+            removed.tile.window_mut().set_minimized(false);
+            return Some(removed);
+        }
+
         if let Some(state) = &self.interactive_move {
             match state {
                 InteractiveMoveState::Starting { window_id, .. } => {
@@ -1258,6 +1285,15 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     pub fn update_window(&mut self, window: &W::Id, serial: Option<Serial>) {
+        if let Some(idx) = self.minimized_idx(window) {
+            let tile = &mut self.minimized[idx].removed.tile;
+            if let Some(serial) = serial {
+                tile.window_mut().on_commit(serial);
+            }
+            tile.update_window();
+            return;
+        }
+
         if let Some(InteractiveMoveState::Moving(move_)) = &mut self.interactive_move {
             if move_.tile.window().id() == window {
                 // Do this before calling update_window() so it can get up-to-date info.
@@ -1729,6 +1765,11 @@ impl<W: LayoutElement> Layout<W> {
             f(move_.tile.window(), Some(&move_.output), None, layout);
         }
 
+        for min in &self.minimized {
+            let tile = &min.removed.tile;
+            f(tile.window(), None, None, tile.ipc_layout_template());
+        }
+
         match &self.monitor_set {
             MonitorSet::Normal { monitors, .. } => {
                 for mon in monitors {
@@ -1752,6 +1793,10 @@ impl<W: LayoutElement> Layout<W> {
     pub fn with_windows_mut(&mut self, mut f: impl FnMut(&mut W, Option<&Output>)) {
         if let Some(InteractiveMoveState::Moving(move_)) = &mut self.interactive_move {
             f(move_.tile.window_mut(), Some(&move_.output));
+        }
+
+        for min in &mut self.minimized {
+            f(min.removed.tile.window_mut(), None);
         }
 
         match &mut self.monitor_set {
@@ -2506,6 +2551,22 @@ impl<W: LayoutElement> Layout<W> {
                     }
                 }
             }
+        }
+
+        for min in &self.minimized {
+            let id = min.removed.tile.window().id();
+            assert!(
+                !self.has_window(id),
+                "a minimized window must not be in the layout"
+            );
+            assert_eq!(
+                self.minimized
+                    .iter()
+                    .filter(|m| m.removed.tile.window().id() == id)
+                    .count(),
+                1,
+                "a window can be minimized only once"
+            );
         }
 
         let mut seen_workspace_id = HashSet::new();
@@ -5056,6 +5117,168 @@ impl<W: LayoutElement> Layout<W> {
 
     pub fn has_window(&self, window: &W::Id) -> bool {
         self.windows().any(|(_, win)| win.id() == window)
+    }
+
+    fn minimized_idx(&self, window: &W::Id) -> Option<usize> {
+        self.minimized
+            .iter()
+            .position(|min| min.removed.tile.window().id() == window)
+    }
+
+    /// angel-niri: whether the window is minimized. Minimized windows are left out of
+    /// `windows()`, `has_window()` and `find_window_and_output()`, so actions don't reach them.
+    pub fn is_minimized(&self, window: &W::Id) -> bool {
+        self.minimized_idx(window).is_some()
+    }
+
+    pub fn minimized_windows(&self) -> impl Iterator<Item = &W> + '_ {
+        self.minimized.iter().map(|min| min.removed.tile.window())
+    }
+
+    pub fn find_minimized(&self, wl_surface: &WlSurface) -> Option<&W> {
+        self.minimized_windows()
+            .find(|win| win.is_wl_surface(wl_surface))
+    }
+
+    pub fn find_minimized_mut(&mut self, wl_surface: &WlSurface) -> Option<&mut W> {
+        self.minimized
+            .iter_mut()
+            .map(|min| min.removed.tile.window_mut())
+            .find(|win| win.is_wl_surface(wl_surface))
+    }
+
+    /// Takes the window out of the layout, remembering its place. Returns whether it did.
+    pub fn minimize_window(&mut self, window: &W::Id) -> bool {
+        let Some((output_name, workspace_id, column_idx)) =
+            self.workspaces().find_map(|(mon, _, ws)| {
+                ws.has_window(window).then(|| {
+                    let column_idx = ws
+                        .scrolling()
+                        .columns()
+                        .position(|col| col.contains(window));
+                    (
+                        mon.map(|mon| mon.output_name().clone()),
+                        ws.id(),
+                        column_idx,
+                    )
+                })
+            })
+        else {
+            return false;
+        };
+
+        let Some(mut removed) = self.remove_window(window, Transaction::new()) else {
+            return false;
+        };
+        removed.tile.stop_move_animations();
+        let win = removed.tile.window_mut();
+        win.set_activated(false);
+        win.set_minimized(true);
+        win.send_pending_configure();
+
+        self.minimized.push(MinimizedWindow {
+            removed,
+            output_name,
+            workspace_id,
+            column_idx,
+        });
+        true
+    }
+
+    /// Puts a minimized window back where it was: its workspace and column if they are still
+    /// there, else the workspace in front on its output, else the active output.
+    pub fn unminimize_window(&mut self, window: &W::Id, activate: bool) -> bool {
+        let Some(idx) = self.minimized_idx(window) else {
+            return false;
+        };
+        let MinimizedWindow {
+            removed,
+            output_name,
+            workspace_id,
+            column_idx,
+        } = self.minimized.remove(idx);
+        let RemovedTile {
+            mut tile,
+            width,
+            is_full_width,
+            is_floating,
+        } = removed;
+        tile.window_mut().set_minimized(false);
+
+        let activate = if activate {
+            ActivateWindow::Yes
+        } else {
+            ActivateWindow::No
+        };
+
+        match &mut self.monitor_set {
+            MonitorSet::Normal {
+                monitors,
+                active_monitor_idx,
+                ..
+            } => {
+                let mon_idx = monitors
+                    .iter()
+                    .position(|mon| mon.has_ws(workspace_id))
+                    .or_else(|| {
+                        let name = output_name.as_ref()?;
+                        monitors.iter().position(|mon| mon.output_name() == name)
+                    })
+                    .unwrap_or(*active_monitor_idx);
+                let mon = &mut monitors[mon_idx];
+
+                let target =
+                    if let Some(ws) = mon.workspaces.iter().find(|ws| ws.id() == workspace_id) {
+                        let columns = ws.scrolling().columns().count();
+                        MonitorAddWindowTarget::Workspace {
+                            id: workspace_id,
+                            column_idx: column_idx.map(|idx| idx.min(columns)),
+                        }
+                    } else {
+                        MonitorAddWindowTarget::Workspace {
+                            id: mon.workspaces[mon.active_workspace_idx].id(),
+                            column_idx: None,
+                        }
+                    };
+
+                mon.add_tile(
+                    tile,
+                    target,
+                    activate,
+                    true,
+                    width,
+                    is_full_width,
+                    is_floating,
+                    None,
+                );
+
+                if activate == ActivateWindow::Yes {
+                    *active_monitor_idx = mon_idx;
+                }
+            }
+            MonitorSet::NoOutputs { workspaces } => {
+                if workspaces.is_empty() {
+                    workspaces.push(Workspace::new_no_outputs(
+                        self.clock.clone(),
+                        self.options.clone(),
+                    ));
+                }
+                let ws_idx = workspaces
+                    .iter()
+                    .position(|ws| ws.id() == workspace_id)
+                    .unwrap_or(0);
+                workspaces[ws_idx].add_tile(
+                    tile,
+                    WorkspaceAddWindowTarget::Auto,
+                    activate,
+                    width,
+                    is_full_width,
+                    is_floating,
+                    None,
+                );
+            }
+        }
+        true
     }
 
     pub fn is_overview_open(&self) -> bool {

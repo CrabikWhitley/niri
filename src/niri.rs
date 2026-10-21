@@ -1161,6 +1161,40 @@ impl State {
         self.niri.queue_redraw_all();
     }
 
+    /// angel-niri: takes a window out of the layout (the app's own button, a taskbar, a bind, IPC).
+    pub fn minimize_window(&mut self, window: &Window) {
+        let was_active = self.niri.layout.focus().map(|m| &m.window) == Some(window);
+
+        if !self.niri.layout.minimize_window(window) {
+            return;
+        }
+
+        if was_active {
+            self.maybe_warp_cursor_to_focus();
+        }
+
+        // FIXME: granular
+        self.niri.queue_redraw_all();
+    }
+
+    /// angel-niri: puts a minimized window back where it was. Returns whether it was minimized.
+    pub fn unminimize_window(&mut self, window: &Window, activate: bool) -> bool {
+        if !self.niri.layout.unminimize_window(window, activate) {
+            return false;
+        }
+
+        self.niri.layout.start_open_animation_for_window(window);
+
+        if activate {
+            self.niri.layer_shell_on_demand_focus = None;
+            self.focus_window(window);
+        } else {
+            // FIXME: granular
+            self.niri.queue_redraw_all();
+        }
+        true
+    }
+
     pub fn confirm_mru(&mut self) {
         if let Some(window) = self.niri.close_mru(MruCloseRequest::Confirm) {
             // focus_window() will warp the cursor to the window only when the keyboard focus is on
@@ -1443,6 +1477,8 @@ impl State {
             } = &self.niri.keyboard_focus
             {
                 if let Some((mapped, _)) = self.niri.layout.find_window_and_output_mut(surface) {
+                    mapped.set_is_focused(false);
+                } else if let Some(mapped) = self.niri.layout.find_minimized_mut(surface) {
                     mapped.set_is_focused(false);
                 }
             }
@@ -2548,7 +2584,11 @@ impl Niri {
         let compositor_state = CompositorState::new_v6::<State>(&display_handle);
         let xdg_shell_state = XdgShellState::new_with_capabilities::<State>(
             &display_handle,
-            [WmCapabilities::Fullscreen, WmCapabilities::Maximize],
+            [
+                WmCapabilities::Fullscreen,
+                WmCapabilities::Maximize,
+                WmCapabilities::Minimize,
+            ],
         );
         let xdg_decoration_state =
             XdgDecorationState::new_with_filter::<State, _>(&display_handle, |client| {

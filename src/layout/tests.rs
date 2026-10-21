@@ -455,6 +455,12 @@ enum Op {
         ws_name: usize,
     },
     CloseWindow(#[proptest(strategy = "1..=5usize")] usize),
+    MinimizeWindow(#[proptest(strategy = "1..=5usize")] usize),
+    UnminimizeWindow {
+        #[proptest(strategy = "1..=5usize")]
+        id: usize,
+        activate: bool,
+    },
     FullscreenWindow(#[proptest(strategy = "1..=5usize")] usize),
     SetFullscreenWindow {
         #[proptest(strategy = "1..=5usize")]
@@ -897,7 +903,7 @@ impl Op {
                 layout.unset_workspace_name(ws_ref);
             }
             Op::AddWindow { mut params } => {
-                if layout.has_window(&params.id) {
+                if layout.has_window(&params.id) || layout.is_minimized(&params.id) {
                     return;
                 }
                 if let Some(parent_id) = params.parent_id {
@@ -1063,6 +1069,12 @@ impl Op {
             }
             Op::CloseWindow(id) => {
                 layout.remove_window(&id, Transaction::new());
+            }
+            Op::MinimizeWindow(id) => {
+                layout.minimize_window(&id);
+            }
+            Op::UnminimizeWindow { id, activate } => {
+                layout.unminimize_window(&id, activate);
             }
             Op::FullscreenWindow(id) => {
                 if !layout.has_window(&id) {
@@ -1654,6 +1666,109 @@ fn workspace_output_name(layout: &Layout<TestWindow>, ws_name: usize) -> &str {
         .and_then(|(monitor, _, _)| monitor)
         .unwrap()
         .output_name()
+}
+
+#[test]
+fn minimize_restores_to_same_column_focused() {
+    let mut layout = check_ops([
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(0),
+        },
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::AddWindow {
+            params: TestWindowParams::new(2),
+        },
+        Op::MinimizeWindow(1),
+    ]);
+    assert!(layout.is_minimized(&1));
+    assert!(!layout.has_window(&1));
+    assert_ne!(layout.focus().map(|win| *win.id()), Some(1));
+
+    check_ops_on_layout(
+        &mut layout,
+        [Op::UnminimizeWindow {
+            id: 1,
+            activate: true,
+        }],
+    );
+    assert!(!layout.is_minimized(&1));
+    let ws = layout.active_workspace().unwrap();
+    let column = ws.scrolling().columns().position(|col| col.contains(&1));
+    assert_eq!(column, Some(1));
+    assert_eq!(layout.focus().map(|win| *win.id()), Some(1));
+}
+
+#[test]
+fn minimize_floating_restores_floating() {
+    let mut params = TestWindowParams::new(0);
+    params.is_floating = true;
+    let layout = check_ops([
+        Op::AddOutput(1),
+        Op::AddWindow { params },
+        Op::MinimizeWindow(0),
+        Op::UnminimizeWindow {
+            id: 0,
+            activate: true,
+        },
+    ]);
+    assert!(layout.active_workspace().unwrap().is_floating(&0));
+}
+
+#[test]
+fn minimized_window_can_close_and_outlive_its_workspace_and_output() {
+    let layout = check_ops([
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(0),
+        },
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::MinimizeWindow(0),
+        Op::MinimizeWindow(1),
+        // Close one while minimized.
+        Op::CloseWindow(0),
+        Op::FocusWorkspaceDown,
+        Op::RemoveOutput(1),
+        Op::AddOutput(2),
+        Op::UnminimizeWindow {
+            id: 1,
+            activate: true,
+        },
+        // Unknown and already restored windows are left alone.
+        Op::UnminimizeWindow {
+            id: 0,
+            activate: true,
+        },
+        Op::MinimizeWindow(3),
+    ]);
+    assert!(!layout.is_minimized(&0));
+    assert!(!layout.has_window(&0));
+    assert!(layout.has_window(&1));
+    assert_eq!(layout.focus().map(|win| *win.id()), Some(1));
+}
+
+#[test]
+fn minimize_with_no_outputs() {
+    check_ops([
+        Op::AddWindow {
+            params: TestWindowParams::new(0),
+        },
+        Op::MinimizeWindow(0),
+        Op::CloseWindow(0),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::MinimizeWindow(1),
+        Op::AddOutput(1),
+        Op::UnminimizeWindow {
+            id: 1,
+            activate: false,
+        },
+    ]);
 }
 
 #[test]

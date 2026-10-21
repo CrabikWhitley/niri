@@ -367,6 +367,39 @@ impl CompositorHandler for State {
                 return;
             }
 
+            // angel-niri: a commit of a minimized toplevel.
+            if let Some(mapped) = self.niri.layout.find_minimized(surface) {
+                let window = mapped.window.clone();
+                let id = mapped.id();
+
+                window.on_commit();
+
+                if !is_mapped(surface) {
+                    // It got unmapped while minimized: it is gone from the layout for good.
+                    trace!("minimized toplevel got unmapped");
+                    self.niri
+                        .stop_casts_for_target(CastTarget::Window { id: id.get() });
+                    self.niri.window_mru_ui.remove_window(id);
+                    self.niri.layout.remove_window(&window, Transaction::new());
+                    self.add_default_dmabuf_pre_commit_hook(surface);
+                    let unmapped = Unmapped::new(window);
+                    self.niri.unmapped_windows.insert(surface.clone(), unmapped);
+                    return;
+                }
+
+                let serial = with_states(surface, |states| {
+                    states
+                        .cached_state
+                        .get::<ToplevelCachedState>()
+                        .current()
+                        .last_acked
+                        .as_ref()
+                        .map(|c| c.serial)
+                });
+                self.niri.layout.update_window(&window, serial);
+                return;
+            }
+
             // This is a commit of a non-toplevel root.
 
             // This might be a popup.
@@ -387,6 +420,14 @@ impl CompositorHandler for State {
                 self.niri.queue_redraw(&output);
                 self.niri.queue_redraw_mru_output();
             }
+            return;
+        }
+
+        // angel-niri: a subsurface commit of a minimized toplevel.
+        if let Some(mapped) = self.niri.layout.find_minimized(&root_surface) {
+            let window = mapped.window.clone();
+            window.on_commit();
+            self.niri.layout.update_window(&window, None);
             return;
         }
 

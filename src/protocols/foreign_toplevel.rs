@@ -47,13 +47,15 @@ pub trait ForeignToplevelHandler {
     fn unset_fullscreen(&mut self, wl_surface: WlSurface);
     fn set_maximized(&mut self, wl_surface: WlSurface);
     fn unset_maximized(&mut self, wl_surface: WlSurface);
+    fn set_minimized(&mut self, wl_surface: WlSurface);
+    fn unset_minimized(&mut self, wl_surface: WlSurface);
 }
 
 struct ToplevelData {
     identifier: MappedId,
     title: Option<String>,
     app_id: Option<String>,
-    states: ArrayVec<u32, 3>,
+    states: ArrayVec<u32, 4>,
     output: Option<Output>,
 
     ext_list_instances: HashSet<ExtForeignToplevelHandleV1>,
@@ -99,7 +101,9 @@ pub fn refresh(state: &mut State) {
 
     // Handle closed windows.
     protocol_state.toplevels.retain(|surface, data| {
-        if state.niri.layout.find_window_and_output(surface).is_some() {
+        if state.niri.layout.find_window_and_output(surface).is_some()
+            || state.niri.layout.find_minimized(surface).is_some()
+        {
             return true;
         }
 
@@ -139,6 +143,7 @@ pub fn refresh(state: &mut State) {
                     cur,
                     output,
                     false,
+                    mapped.is_minimized(),
                 );
             }
         });
@@ -146,6 +151,7 @@ pub fn refresh(state: &mut State) {
 
     // Finally, refresh the focused window.
     if let Some((identifier, window, output)) = focused {
+        // The focused window is never minimized.
         let toplevel = window.toplevel().expect("no X11 support");
         let wl_surface = toplevel.wl_surface();
         with_toplevel_role_and_current(toplevel, |role, cur| {
@@ -162,6 +168,7 @@ pub fn refresh(state: &mut State) {
                 cur,
                 output.as_ref(),
                 true,
+                false,
             );
         });
     }
@@ -200,8 +207,9 @@ fn refresh_toplevel(
     current: &ToplevelState,
     output: Option<&Output>,
     has_focus: bool,
+    is_minimized: bool,
 ) {
-    let states = to_state_vec(&current.states, has_focus);
+    let states = to_state_vec(&current.states, has_focus, is_minimized);
 
     match protocol_state.toplevels.entry(wl_surface.clone()) {
         Entry::Occupied(entry) => {
@@ -573,8 +581,10 @@ where
             zwlr_foreign_toplevel_handle_v1::Request::UnsetMaximized => {
                 state.unset_maximized(surface)
             }
-            zwlr_foreign_toplevel_handle_v1::Request::SetMinimized => (),
-            zwlr_foreign_toplevel_handle_v1::Request::UnsetMinimized => (),
+            zwlr_foreign_toplevel_handle_v1::Request::SetMinimized => state.set_minimized(surface),
+            zwlr_foreign_toplevel_handle_v1::Request::UnsetMinimized => {
+                state.unset_minimized(surface)
+            }
             zwlr_foreign_toplevel_handle_v1::Request::Activate { .. } => {
                 state.activate(surface);
             }
@@ -601,8 +611,15 @@ where
     }
 }
 
-fn to_state_vec(states: &ToplevelStateSet, has_focus: bool) -> ArrayVec<u32, 3> {
+fn to_state_vec(
+    states: &ToplevelStateSet,
+    has_focus: bool,
+    is_minimized: bool,
+) -> ArrayVec<u32, 4> {
     let mut rv = ArrayVec::new();
+    if is_minimized {
+        rv.push(zwlr_foreign_toplevel_handle_v1::State::Minimized as u32);
+    }
     if states.contains(xdg_toplevel::State::Maximized) {
         rv.push(zwlr_foreign_toplevel_handle_v1::State::Maximized as u32);
     }

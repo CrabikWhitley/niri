@@ -874,6 +874,17 @@ impl XdgShellHandler for State {
         }
     }
 
+    fn minimize_request(&mut self, surface: ToplevelSurface) {
+        if let Some((mapped, _)) = self
+            .niri
+            .layout
+            .find_window_and_output(surface.wl_surface())
+        {
+            let window = mapped.window.clone();
+            self.minimize_window(&window);
+        }
+    }
+
     fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
         if self
             .niri
@@ -882,6 +893,21 @@ impl XdgShellHandler for State {
             .is_some()
         {
             // An unmapped toplevel got destroyed.
+            return;
+        }
+
+        if let Some(mapped) = self.niri.layout.find_minimized(surface.wl_surface()) {
+            // A minimized toplevel got destroyed: nothing on screen to animate.
+            let window = mapped.window.clone();
+            let id = mapped.id();
+            self.niri
+                .stop_casts_for_target(CastTarget::Window { id: id.get() });
+            self.niri.window_mru_ui.remove_window(id);
+            self.niri.layout.remove_window(&window, Transaction::new());
+            let surface = surface.wl_surface();
+            if surface.is_alive() {
+                self.add_default_dmabuf_pre_commit_hook(surface);
+            }
             return;
         }
 
@@ -1510,6 +1536,10 @@ pub fn add_mapped_toplevel_pre_commit_hook(toplevel: &ToplevelSurface) -> HookId
             trace_span!("toplevel pre-commit", surface = %surface.id(), serial = Empty).entered();
 
         let Some((mapped, output)) = state.niri.layout.find_window_and_output_mut(surface) else {
+            // angel-niri: a minimized window is still mapped, only out of the layout and not drawn.
+            if state.niri.layout.find_minimized(surface).is_some() {
+                return;
+            }
             error!("pre-commit hook for mapped surfaces must be removed upon unmapping");
             return;
         };

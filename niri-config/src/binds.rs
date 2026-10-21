@@ -289,6 +289,9 @@ pub enum Action {
     SetBackgroundFps(u32, Option<String>),
     #[knuffel(skip)]
     SetTearing(bool, Option<String>),
+    MinimizeWindow,
+    #[knuffel(skip)]
+    MinimizeWindowById(u64),
     FullscreenWindow,
     #[knuffel(skip)]
     FullscreenWindowById(u64),
@@ -582,6 +585,8 @@ impl From<niri_ipc::Action> for Action {
             niri_ipc::Action::SetBackgroundFps { fps, output } => {
                 Self::SetBackgroundFps(fps, output)
             }
+            niri_ipc::Action::MinimizeWindow { id: None } => Self::MinimizeWindow,
+            niri_ipc::Action::MinimizeWindow { id: Some(id) } => Self::MinimizeWindowById(id),
             niri_ipc::Action::FullscreenWindow { id: None } => Self::FullscreenWindow,
             niri_ipc::Action::FullscreenWindow { id: Some(id) } => Self::FullscreenWindowById(id),
             niri_ipc::Action::ToggleWindowedFullscreen { id: None } => {
