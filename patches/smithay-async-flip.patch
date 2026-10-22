@@ -1,0 +1,219 @@
+From 422ab3f8ef1ada1d2e7cb3863c949e8829588bb9 Mon Sep 17 00:00:00 2001
+From: mixadod <mixadod123@gmail.com>
+Date: Thu, 22 Oct 2026 18:54:00 +0300
+Subject: [PATCH] drm: async page flips for tearing
+
+DrmCompositor::set_allow_tearing(true): a frame that changes only the
+primary plane's buffer (same src, dst, format; no other plane touched)
+is flipped with DRM_MODE_PAGE_FLIP_ASYNC, a request carrying FB_ID
+alone, the one change the kernel takes in an async flip. The buffer's
+sync point is waited for on the CPU, as the request has no IN_FENCE_FD.
+A flip the kernel refuses falls back to a normal one and async flips
+stay off until set_allow_tearing is called with a new value. Atomic
+surfaces only.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/backend/drm/compositor/mod.rs | 76 +++++++++++++++++++++++++++++++
+ src/backend/drm/surface/atomic.rs | 34 ++++++++++++++
+ src/backend/drm/surface/mod.rs    | 16 +++++++
+ 3 files changed, 126 insertions(+)
+
+diff --git a/src/backend/drm/compositor/mod.rs b/src/backend/drm/compositor/mod.rs
+index 3f471cf3..0ea83d4f 100644
+--- a/src/backend/drm/compositor/mod.rs
++++ b/src/backend/drm/compositor/mod.rs
+@@ -648,6 +648,36 @@ impl<B: Buffer, F: Framebuffer> FrameState<B, F> {
+     }
+ }
+ 
++impl<B: Buffer, F: Framebuffer> FrameState<B, F> {
++    /// angel-smithay: the primary plane's new framebuffer (and what to wait for before showing
++    /// it) when nothing else changed since `previous`: all an async page flip may change.
++    fn async_flip(
++        &self,
++        previous: &Self,
++        primary: plane::Handle,
++    ) -> Option<(framebuffer::Handle, Option<SyncPoint>)> {
++        let mut flip = None;
++        for (handle, state) in &self.planes {
++            if *handle != primary {
++                if !state.skip {
++                    return None;
++                }
++                continue;
++            }
++            let config = state.config.as_ref().filter(|_| !state.skip)?;
++            let before = previous.plane_state(primary)?.config.as_ref()?;
++            if !config.is_compatible(before) {
++                return None;
++            }
++            flip = Some((
++                *config.buffer.as_ref(),
++                config.sync.as_ref().map(|(sync, _)| sync.clone()),
++            ));
++        }
++        flip
++    }
++}
++
+ impl<B: Buffer, F: Framebuffer> FrameState<B, F> {
+     #[profiling::function]
+     #[inline]
+@@ -1063,6 +1093,9 @@ where
+     supports_fencing: bool,
+     reset_pending: bool,
+     signaled_fence: Option<Arc<OwnedFd>>,
++    // angel-smithay: flip async ("tearing") when only the primary plane's buffer changes
++    allow_tearing: bool,
++    async_flip_failed: bool,
+ 
+     framebuffer_exporter: F,
+ 
+@@ -1248,6 +1281,8 @@ where
+                         primary_plane_damage_bag: DamageBag::new(4),
+                         primary_is_opaque: is_opaque,
+                         reset_pending: true,
++                        allow_tearing: false,
++                        async_flip_failed: false,
+                         signaled_fence,
+                         current_frame,
+                         pending_frame: None,
+@@ -1430,6 +1465,8 @@ where
+             primary_plane_damage_bag: DamageBag::new(4),
+             primary_is_opaque: is_opaque,
+             reset_pending: true,
++            allow_tearing: false,
++            async_flip_failed: false,
+             signaled_fence,
+             current_frame,
+             pending_frame: None,
+@@ -2545,10 +2582,38 @@ where
+         } = self.queued_frame.take().unwrap();
+ 
+         let allow_partial_update = prepared_frame.kind == PreparedFrameKind::Partial;
++        let async_flip = (self.allow_tearing
++            && !self.async_flip_failed
++            && !self.surface.is_legacy()
++            && !self.surface.commit_pending())
++        .then(|| {
++            prepared_frame
++                .frame
++                .async_flip(&self.current_frame, self.surface.plane())
++        })
++        .flatten();
+         let flip = if self.surface.commit_pending() {
+             prepared_frame
+                 .frame
+                 .commit(&self.surface, self.supports_fencing, allow_partial_update, true)
++        } else if let Some((fb, sync)) = async_flip {
++            // the async request carries no IN_FENCE_FD: wait for the buffer here
++            if let Some(Err(err)) = sync.map(|sync| sync.wait()) {
++                warn!("error waiting for an async flip's buffer: {err:?}");
++            }
++            match self.surface.page_flip_async(self.surface.plane(), fb, true) {
++                Ok(()) => Ok(()),
++                Err(err) => {
++                    warn!("async page flip refused, tearing off until asked again: {err}");
++                    self.async_flip_failed = true;
++                    prepared_frame.frame.page_flip(
++                        &self.surface,
++                        self.supports_fencing,
++                        allow_partial_update,
++                        true,
++                    )
++                }
++            }
+         } else {
+             prepared_frame
+                 .frame
+@@ -2731,6 +2796,17 @@ where
+         self.surface.vrr_supported(conn).map_err(FrameError::DrmError)
+     }
+ 
++    /// angel-smithay: allow async ("tearing") page flips: a frame that changes only the primary
++    /// plane's buffer is shown at once instead of at the next vblank. Atomic surfaces only; a
++    /// flip the kernel refuses falls back to a normal one, and async flips stay off until this
++    /// is set again.
++    pub fn set_allow_tearing(&mut self, allow: bool) {
++        if allow != self.allow_tearing {
++            self.async_flip_failed = false;
++        }
++        self.allow_tearing = allow;
++    }
++
+     /// Returns if Variable Refresh Rate is currently enabled for frames composed by this [`DrmCompositor`].
+     pub fn vrr_enabled(&self) -> bool {
+         self.surface.vrr_enabled()
+diff --git a/src/backend/drm/surface/atomic.rs b/src/backend/drm/surface/atomic.rs
+index e63f0efa..4cf9d901 100644
+--- a/src/backend/drm/surface/atomic.rs
++++ b/src/backend/drm/surface/atomic.rs
+@@ -924,6 +924,40 @@ impl AtomicDrmSurface {
+         res
+     }
+ 
++    /// angel-smithay: an async ("tearing") page flip that changes only `plane`'s framebuffer,
++    /// the only change the kernel takes with `DRM_MODE_PAGE_FLIP_ASYNC`.
++    pub fn page_flip_async(
++        &self,
++        plane: plane::Handle,
++        fb: framebuffer::Handle,
++        event: bool,
++    ) -> Result<(), Error> {
++        if !self.active.load(Ordering::SeqCst) {
++            return Err(Error::DeviceInactive);
++        }
++
++        let prop_mapping = self.prop_mapping.read().unwrap();
++        let mut req = AtomicModeReq::new();
++        req.add_property(
++            plane,
++            prop_mapping.plane_prop_handle(plane, "FB_ID")?,
++            property::Value::Framebuffer(Some(fb)),
++        );
++
++        let mut flags = AtomicCommitFlags::PAGE_FLIP_ASYNC | AtomicCommitFlags::NONBLOCK;
++        if event {
++            flags |= AtomicCommitFlags::PAGE_FLIP_EVENT;
++        }
++        trace!(?plane, ?fb, "Queueing async page flip");
++        self.fd.atomic_commit(flags, req).map_err(|source| {
++            Error::Access(AccessError {
++                errmsg: "Async page flip commit failed",
++                dev: self.fd.dev_path(),
++                source,
++            })
++        })
++    }
++
+     // this helper function disconnects the plane.
+     // this is mostly used to remove the contents quickly, e.g. on tty switch,
+     // as other compositors might not make use of other planes,
+diff --git a/src/backend/drm/surface/mod.rs b/src/backend/drm/surface/mod.rs
+index 677fa132..b74b006d 100644
+--- a/src/backend/drm/surface/mod.rs
++++ b/src/backend/drm/surface/mod.rs
+@@ -449,6 +449,22 @@ impl DrmSurface {
+         }
+     }
+ 
++    /// angel-smithay: an async ("tearing") page flip of `plane` to `fb`, nothing else changing.
++    ///
++    /// Atomic surfaces only: a legacy one returns [`Error::UnsupportedPlaneConfiguration`].
++    #[profiling::function]
++    pub fn page_flip_async(
++        &self,
++        plane: plane::Handle,
++        fb: framebuffer::Handle,
++        event: bool,
++    ) -> Result<(), Error> {
++        match &*self.internal {
++            DrmSurfaceInternal::Atomic(surf) => surf.page_flip_async(plane, fb, event),
++            DrmSurfaceInternal::Legacy(_) => Err(Error::UnsupportedPlaneConfiguration(plane)),
++        }
++    }
++
+     /// Returns a set of available planes for this surface
+     pub fn planes(&self) -> &Planes {
+         &self.planes

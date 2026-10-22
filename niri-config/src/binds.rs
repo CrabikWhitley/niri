@@ -287,6 +287,8 @@ pub enum Action {
     CloseWindowById(u64),
     #[knuffel(skip)]
     SetBackgroundFps(u32, Option<String>),
+    #[knuffel(skip)]
+    SetTearing(bool, Option<String>),
     FullscreenWindow,
     #[knuffel(skip)]
     FullscreenWindowById(u64),
@@ -576,6 +578,7 @@ impl From<niri_ipc::Action> for Action {
             }
             niri_ipc::Action::CloseWindow { id: None } => Self::CloseWindow,
             niri_ipc::Action::CloseWindow { id: Some(id) } => Self::CloseWindowById(id),
+            niri_ipc::Action::SetTearing { on, output } => Self::SetTearing(on, output),
             niri_ipc::Action::SetBackgroundFps { fps, output } => {
                 Self::SetBackgroundFps(fps, output)
             }

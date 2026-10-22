@@ -1069,6 +1069,10 @@ impl State {
                     mapped.toplevel().send_close();
                 }
             }
+            Action::SetTearing(on, output) => {
+                self.niri.set_tearing(on, output);
+                self.niri.queue_redraw_all();
+            }
             Action::SetBackgroundFps(fps, output) => {
                 self.niri.set_background_fps(fps, output);
                 self.niri.queue_redraw_all();

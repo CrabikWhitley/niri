@@ -1,0 +1,61 @@
+From 441cbdcf5ed5668d3f71f0cc6be52e8c4c0bb6b2 Mon Sep 17 00:00:00 2001
+From: mixadod <mixadod123@gmail.com>
+Date: Thu, 22 Oct 2026 18:55:24 +0300
+Subject: [PATCH] drm: log the first async flip after tearing is allowed
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/backend/drm/compositor/mod.rs | 12 +++++++++++-
+ 1 file changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/src/backend/drm/compositor/mod.rs b/src/backend/drm/compositor/mod.rs
+index 0ea83d4f..3b4cfff6 100644
+--- a/src/backend/drm/compositor/mod.rs
++++ b/src/backend/drm/compositor/mod.rs
+@@ -1096,6 +1096,7 @@ where
+     // angel-smithay: flip async ("tearing") when only the primary plane's buffer changes
+     allow_tearing: bool,
+     async_flip_failed: bool,
++    async_flip_seen: bool,
+ 
+     framebuffer_exporter: F,
+ 
+@@ -1283,6 +1284,7 @@ where
+                         reset_pending: true,
+                         allow_tearing: false,
+                         async_flip_failed: false,
++                        async_flip_seen: false,
+                         signaled_fence,
+                         current_frame,
+                         pending_frame: None,
+@@ -1467,6 +1469,7 @@ where
+             reset_pending: true,
+             allow_tearing: false,
+             async_flip_failed: false,
++            async_flip_seen: false,
+             signaled_fence,
+             current_frame,
+             pending_frame: None,
+@@ -2602,7 +2605,13 @@ where
+                 warn!("error waiting for an async flip's buffer: {err:?}");
+             }
+             match self.surface.page_flip_async(self.surface.plane(), fb, true) {
+-                Ok(()) => Ok(()),
++                Ok(()) => {
++                    if !self.async_flip_seen {
++                        self.async_flip_seen = true;
++                        info!("async page flips (tearing) work on this output");
++                    }
++                    Ok(())
++                }
+                 Err(err) => {
+                     warn!("async page flip refused, tearing off until asked again: {err}");
+                     self.async_flip_failed = true;
+@@ -2803,6 +2812,7 @@ where
+     pub fn set_allow_tearing(&mut self, allow: bool) {
+         if allow != self.allow_tearing {
+             self.async_flip_failed = false;
++            self.async_flip_seen = false;
+         }
+         self.allow_tearing = allow;
+     }

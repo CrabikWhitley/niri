@@ -187,3 +187,10 @@ assets = [
     ["resources/niri.service", "/usr/lib/systemd/user/", "644"],
     ["resources/niri-shutdown.target", "/usr/lib/systemd/user/", "644"],
 ]
+
+# crabikOS: для tearing нужны асинхронные page flip в smithay (patches/smithay-async-flip*.patch, авторство
+# angel-smithay, MIT). Папку ../crabikOS-smithay готовит `crabikos niri build`: smithay на версии из
+# patches/smithay-base-rev + эти патчи. Вручную: git clone, checkout этой версии, git apply.
+[patch."https://github.com/Smithay/smithay.git"]
+smithay = { path = "../crabikOS-smithay" }
+smithay-drm-extras = { path = "../crabikOS-smithay/smithay-drm-extras" }

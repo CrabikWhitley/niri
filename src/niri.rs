@@ -265,6 +265,8 @@ pub struct Niri {
     pub background_fps: Option<u32>,
     /// The game's output, never put off.
     pub background_keep: Option<String>,
+    /// angel-niri: the game's output, whose fullscreen frames may tear (game.rs).
+    pub tearing_output: Option<String>,
 
     /// Layer surfaces which don't have a buffer attached yet.
     pub unmapped_layer_surfaces: HashSet<WlSurface>,
@@ -2806,6 +2808,7 @@ impl Niri {
             unmapped_windows: HashMap::new(),
             background_fps: None,
             background_keep: None,
+            tearing_output: None,
             unmapped_layer_surfaces: HashSet::new(),
             mapped_layer_surfaces: HashMap::new(),
             root_surface: HashMap::new(),
@@ -4053,6 +4056,11 @@ impl Niri {
         if state.frame_clock.vrr() || self.config.borrow().debug.disable_render_deadline {
             return false;
         }
+        // Tearing shows a frame at once: there's no vblank to wait for either.
+        if self.tearing_now(output) {
+            return false;
+        }
+        let state = self.output_state.get_mut(output).unwrap();
         let Some(refresh) = state.frame_clock.refresh_interval() else {
             return false;
         };

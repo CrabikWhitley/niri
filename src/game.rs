@@ -8,6 +8,12 @@
 //! Never put off: the game's output (named once, so moving the focus to another screen mid-game
 //! changes nothing) and any output a screencast shows — itself or a window on it — so a stream or
 //! a recording never loses frames.
+//!
+//! `niri msg action set-tearing --output GAME [--on false]` (the same script, when the game mode
+//! asks for it): while a fullscreen window is on top of the game's output, a frame that changes
+//! only the primary plane's buffer — the game scanned out, or composited with nothing else moving —
+//! is flipped at once instead of at the next vblank (angel-smithay's async flips): less input lag,
+//! at the price of tearing. The desktop never tears.
 
 use std::time::Duration;
 
@@ -28,6 +34,22 @@ impl Niri {
         for state in self.output_state.values_mut() {
             state.background_until = None;
         }
+    }
+
+    /// `output`: the game's; none given, the active one now.
+    pub fn set_tearing(&mut self, on: bool, output: Option<String>) {
+        self.tearing_output = on
+            .then(|| output.or_else(|| self.layout.active_output().map(|o| o.name())))
+            .flatten();
+    }
+
+    /// Whether `output`'s frames may tear now: it is the game's and shows a fullscreen window.
+    pub fn tearing_now(&self, output: &Output) -> bool {
+        self.tearing_output.as_deref() == Some(output.name().as_str())
+            && self
+                .layout
+                .monitor_for_output(output)
+                .is_some_and(|mon| mon.fullscreen_window_above_top_layer().is_some())
     }
 
     /// Whether `output` has to wait before its queued redraw. Arms a timer that lets it go.
