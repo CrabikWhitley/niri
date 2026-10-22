@@ -306,6 +306,25 @@ pub enum Action {
         #[cfg_attr(feature = "clap", arg(long))]
         id: Option<u64>,
     },
+    /// Redraw every output but the game's at most this many times a second (angel-niri).
+    ///
+    /// For a game mode: the game's output keeps its full rate, the rest of the desktop draws less.
+    /// 0 turns it off.
+    #[cfg_attr(
+        feature = "clap",
+        clap(about = "Limit the frame rate of background outputs")
+    )]
+    SetBackgroundFps {
+        /// Frames per second; 0 to turn the limit off.
+        #[cfg_attr(feature = "clap", arg())]
+        fps: u32,
+        /// The game's output, kept at its full rate (outputs a screencast shows are kept too).
+        ///
+        /// If `None`, the active output at the moment of the call.
+        #[cfg_attr(feature = "clap", arg(long))]
+        #[serde(default)]
+        output: Option<String>,
+    },
     /// Toggle fullscreen on a window.
     #[cfg_attr(
         feature = "clap",

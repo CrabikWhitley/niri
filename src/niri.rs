@@ -261,6 +261,11 @@ pub struct Niri {
     // Windows which don't have a buffer attached yet.
     pub unmapped_windows: HashMap<WlSurface, Unmapped>,
 
+    /// angel-niri: the outputs but the active one redraw at most this often (game.rs).
+    pub background_fps: Option<u32>,
+    /// The game's output, never put off.
+    pub background_keep: Option<String>,
+
     /// Layer surfaces which don't have a buffer attached yet.
     pub unmapped_layer_surfaces: HashSet<WlSurface>,
 
@@ -552,6 +557,10 @@ pub struct OutputState {
     screen_transition: Option<ScreenTransition>,
     /// Damage tracker used for the debug damage visualization.
     pub debug_damage_tracker: OutputDamageTracker,
+    /// angel-niri (game.rs): when the last redraw began, and until when a background output's
+    /// next one is put off.
+    pub last_redraw_at: Option<Duration>,
+    pub background_until: Option<Duration>,
 }
 
 #[derive(Debug, Default)]
@@ -2795,6 +2804,8 @@ impl Niri {
             sorted_outputs: Vec::default(),
             output_state: HashMap::new(),
             unmapped_windows: HashMap::new(),
+            background_fps: None,
+            background_keep: None,
             unmapped_layer_surfaces: HashSet::new(),
             mapped_layer_surfaces: HashMap::new(),
             root_surface: HashMap::new(),
@@ -3191,6 +3202,8 @@ impl Niri {
             lock_color_buffer: SolidColorBuffer::new(size, CLEAR_COLOR_LOCKED),
             screen_transition: None,
             debug_damage_tracker: OutputDamageTracker::from_output(&output),
+            last_redraw_at: None,
+            background_until: None,
         };
         let rv = self.output_state.insert(output.clone(), state);
         assert!(rv.is_none(), "output was already tracked");
@@ -3997,11 +4010,14 @@ impl Niri {
         let _span = tracy_client::span!("Niri::redraw_queued_outputs");
 
         // Outputs are rendered sequentially, so render the one with the soonest vblank first.
+        // (angel-niri: a background output put off by game.rs waits for its timer)
+        let mut waiting = Vec::new();
         while let Some((output, _)) = self
             .output_state
             .iter()
-            .filter(|(_, state)| {
+            .filter(|(output, state)| {
                 !state.render_deadline.is_pending()
+                    && !waiting.contains(*output)
                     && matches!(
                         state.redraw_state,
                         RedrawState::Queued | RedrawState::WaitingForEstimatedVBlankAndQueued(_)
@@ -4010,6 +4026,10 @@ impl Niri {
             .min_by_key(|(_, state)| state.frame_clock.next_presentation_time())
         {
             let output = output.clone();
+            if self.background_wait(&output) {
+                waiting.push(output);
+                continue;
+            }
             if matches!(backend, Backend::Tty(_)) && self.defer_redraw_to_deadline(&output) {
                 continue;
             }
@@ -5035,6 +5055,7 @@ impl Niri {
         ));
 
         let target_presentation_time = state.frame_clock.next_presentation_time();
+        state.last_redraw_at = Some(get_monotonic_time());
 
         // Freeze the clock at the target time.
         self.clock.set_unadjusted(target_presentation_time);

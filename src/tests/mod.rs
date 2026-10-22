@@ -9,6 +9,7 @@ mod animations;
 mod binds;
 mod floating;
 mod fullscreen;
+mod game;
 mod layer_shell;
 mod remove_output;
 mod transactions;
