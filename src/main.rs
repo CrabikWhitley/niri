@@ -31,7 +31,9 @@ use sd_notify::NotifyState;
 use smithay::reexports::wayland_server::Display;
 use tracing_subscriber::EnvFilter;
 
-const DEFAULT_LOG_FILTER: &str = "niri=debug,smithay::backend::renderer::gles=error";
+// angel-niri: + the DRM compositor (tearing: whether async flips work or were refused)
+const DEFAULT_LOG_FILTER: &str =
+    "niri=debug,smithay::backend::renderer::gles=error,smithay::backend::drm::compositor=info";
 
 #[cfg(feature = "profile-with-tracy-allocations")]
 #[global_allocator]
