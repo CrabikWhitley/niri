@@ -2280,6 +2280,10 @@ impl State {
             Action::ExpandColumnToAvailableWidth => {
                 self.niri.layout.expand_column_to_available_width();
             }
+            Action::FindCursor => {
+                self.niri.cursor_shake.find();
+                self.niri.queue_redraw_all();
+            }
             Action::ShowHotkeyOverlay => {
                 if self.niri.hotkey_overlay.show() {
                     self.niri.queue_redraw_all();
@@ -2801,6 +2805,9 @@ impl State {
             }
         }
 
+        // A confined pointer belongs to a game or the like: its movement is not a shake.
+        let may_shake = pointer_confined.is_none();
+
         let under = self.niri.contents_under(new_pos);
 
         // Handle confined pointer.
@@ -2888,6 +2895,14 @@ impl State {
                 let output = output.clone();
                 self.niri.layout.dnd_update(output, pos_within_output);
             }
+        }
+
+        // Shake to find the cursor: only free movement counts (no button held, no grab).
+        if may_shake && !pointer.is_grabbed() {
+            let time = Duration::from_micros(event.time().micros());
+            self.niri.cursor_shake.on_motion(new_pos, time);
+        } else {
+            self.niri.cursor_shake.interrupt();
         }
 
         // Notify a11y.
@@ -2984,6 +2999,14 @@ impl State {
                 let output = output.clone();
                 self.niri.layout.dnd_update(output, pos_within_output);
             }
+        }
+
+        // Shake to find the cursor (absolute devices: tablets in mouse mode, nested sessions).
+        if !pointer.is_grabbed() {
+            let time = Duration::from_micros(event.time().micros());
+            self.niri.cursor_shake.on_motion(pos, time);
+        } else {
+            self.niri.cursor_shake.interrupt();
         }
 
         // Notify a11y.

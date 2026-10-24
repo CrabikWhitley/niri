@@ -4,7 +4,7 @@ use keyframe::functions::{EaseOutCubic, EaseOutQuad};
 use keyframe::EasingFunction;
 
 mod bezier;
-use bezier::CubicBezier;
+pub use bezier::CubicBezier;
 
 mod spring;
 pub use spring::{Spring, SpringParams};

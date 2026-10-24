@@ -2003,6 +2003,16 @@ mod tests {
                 hide_after_inactive_ms: Some(
                     3000,
                 ),
+                shake_to_find: ShakeToFind {
+                    off: true,
+                    magnification: 3.0,
+                    over_magnification: 1.0,
+                    max_magnification: 6.0,
+                    sensitivity: 4.0,
+                    interval_ms: 1000,
+                    hold_ms: 2000,
+                    animation_ms: 200,
+                },
             },
             screenshot_path: ScreenshotPath(
                 Some(

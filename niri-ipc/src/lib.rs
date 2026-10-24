@@ -791,6 +791,8 @@ pub enum Action {
     },
     /// Show the hotkey overlay.
     ShowHotkeyOverlay {},
+    /// Make the cursor big for a moment, as if the mouse was shaken.
+    FindCursor {},
     /// Move the focused workspace to the monitor to the left.
     MoveWorkspaceToMonitorLeft {},
     /// Move the focused workspace to the monitor to the right.
