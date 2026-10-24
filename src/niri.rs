@@ -4724,11 +4724,26 @@ impl Niri {
         push_popups_from_layer!(Layer::Overlay);
         push_normal_from_layer!(Layer::Overlay);
 
+        // Where the output of a window being dragged is relative to this one: the window is
+        // drawn on every output it reaches, not only on the one under the pointer.
+        let move_offset = self
+            .layout
+            .interactive_move_output()
+            .and_then(|move_output| {
+                let from = self.global_space.output_geometry(move_output)?.loc;
+                let to = self.global_space.output_geometry(output)?.loc;
+                Some((from - to).to_f64())
+            });
+
         // When rendering above the top layer, we put the regular monitor elements first.
         // Otherwise, we will render all layer-shell pop-ups and the top layer on top.
         if mon.render_above_top_layer() {
-            self.layout
-                .render_interactive_move_for_output(ctx.r(), output, &mut |elem| push(elem.into()));
+            self.layout.render_interactive_move_for_output(
+                ctx.r(),
+                output,
+                move_offset,
+                &mut |elem| push(elem.into()),
+            );
 
             mon.render_insert_hint_between_workspaces(ctx.renderer, &mut |elem| push(elem.into()));
 
@@ -4750,8 +4765,12 @@ impl Niri {
             push_popups_from_layer!(Layer::Top);
             push_normal_from_layer!(Layer::Top);
 
-            self.layout
-                .render_interactive_move_for_output(ctx.r(), output, &mut |elem| push(elem.into()));
+            self.layout.render_interactive_move_for_output(
+                ctx.r(),
+                output,
+                move_offset,
+                &mut |elem| push(elem.into()),
+            );
 
             mon.render_insert_hint_between_workspaces(ctx.renderer, &mut |elem| push(elem.into()));
 

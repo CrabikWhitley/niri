@@ -4390,6 +4390,14 @@ impl<W: LayoutElement> Layout<W> {
         }
     }
 
+    /// The output the interactively moved window currently belongs to, if any.
+    pub fn interactive_move_output(&self) -> Option<&Output> {
+        match &self.interactive_move {
+            Some(InteractiveMoveState::Moving(move_)) => Some(&move_.output),
+            _ => None,
+        }
+    }
+
     pub fn interactive_move_is_moving_above_output(&self, output: &Output) -> bool {
         let Some(InteractiveMoveState::Moving(move_)) = &self.interactive_move else {
             return false;
@@ -4848,10 +4856,16 @@ impl<W: LayoutElement> Layout<W> {
         }
     }
 
+    /// Renders the interactively moved window on `output`.
+    ///
+    /// `offset_from_move_output` is where the window's output is relative to `output` in the
+    /// global space. With it, a window dragged across a monitor edge is drawn on both monitors,
+    /// so it doesn't jump from one to the other when the pointer crosses the edge.
     pub fn render_interactive_move_for_output<R: NiriRenderer>(
         &self,
         ctx: RenderCtx<R>,
         output: &Output,
+        offset_from_move_output: Option<Point<f64, Logical>>,
         push: &mut dyn FnMut(RescaleRenderElement<TileRenderElement<R>>),
     ) {
         if self.update_render_elements_time != self.clock.now() {
@@ -4862,13 +4876,25 @@ impl<W: LayoutElement> Layout<W> {
             return;
         };
 
+        let zoom = self.overview_zoom();
+        let mut pos_in_backdrop = move_.tile_render_location(zoom);
+
         if &move_.output != output {
-            return;
+            // In the overview the outputs are zoomed, so the halves wouldn't line up.
+            let Some(offset) = offset_from_move_output.filter(|_| zoom == 1.) else {
+                return;
+            };
+            pos_in_backdrop += offset;
+
+            // Only where the window reaches this output.
+            let tile_rect = Rectangle::new(pos_in_backdrop, move_.tile.animated_tile_size());
+            let output_rect = Rectangle::from_size(output_size(output));
+            if !tile_rect.overlaps(output_rect) {
+                return;
+            }
         }
 
-        let scale = Scale::from(move_.output.current_scale().fractional_scale());
-        let zoom = self.overview_zoom();
-        let pos_in_backdrop = move_.tile_render_location(zoom);
+        let scale = Scale::from(output.current_scale().fractional_scale());
         let xray_pos = XrayPos::new(pos_in_backdrop, zoom);
 
         move_
