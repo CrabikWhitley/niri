@@ -384,7 +384,11 @@ mod tests {
         // …does nothing while the feature is off.
         let mut t = 0;
         for i in 0..60 {
-            let x = if (i / 10) % 2 == 0 { 300. + (i % 10) as f64 * 30. } else { 600. - (i % 10) as f64 * 30. };
+            let x = if (i / 10) % 2 == 0 {
+                300. + (i % 10) as f64 * 30.
+            } else {
+                600. - (i % 10) as f64 * 30.
+            };
             t += 8;
             assert!(!shake.on_motion(Point::from((x, 500.)), ms(t)));
         }
