@@ -41,6 +41,11 @@ impl CursorManager {
         }
     }
 
+    /// The configured cursor size (`xcursor-size`), in logical pixels.
+    pub fn size(&self) -> u8 {
+        self.size
+    }
+
     /// Reload the cursor theme.
     pub fn reload(&mut self, theme: &str, size: u8) {
         Self::ensure_env(theme, size);

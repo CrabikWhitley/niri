@@ -126,6 +126,7 @@ use crate::animation::Clock;
 use crate::backend::tty::SurfaceDmabufFeedback;
 use crate::backend::{Backend, Headless, RenderResult, Tty, Winit};
 use crate::cursor::{CursorManager, CursorTextureCache, RenderCursor, XCursor};
+use crate::cursor_shake::CursorShake;
 #[cfg(feature = "dbus")]
 use crate::dbus::freedesktop_locale1::Locale1ToNiri;
 #[cfg(feature = "dbus")]
@@ -387,6 +388,8 @@ pub struct Niri {
 
     pub cursor_manager: CursorManager,
     pub cursor_texture_cache: CursorTextureCache,
+    /// Shake the mouse to find the cursor.
+    pub cursor_shake: CursorShake,
     pub cursor_shape_manager_state: CursorShapeManagerState,
     pub dnd_icon: Option<DndIcon>,
     /// Contents under pointer.
@@ -1747,6 +1750,9 @@ impl State {
                 .reload(&config.cursor.xcursor_theme, config.cursor.xcursor_size);
             self.niri.cursor_texture_cache.clear();
         }
+        self.niri
+            .cursor_shake
+            .update_config(config.cursor.shake_to_find);
 
         // We need &mut self to reload the xkb config, so just store it here.
         if config.input.keyboard.xkb != old_config.input.keyboard.xkb {
@@ -2675,6 +2681,7 @@ impl Niri {
         let cursor_shape_manager_state = CursorShapeManagerState::new::<State>(&display_handle);
         let cursor_manager =
             CursorManager::new(&config_.cursor.xcursor_theme, config_.cursor.xcursor_size);
+        let cursor_shake = CursorShake::new(animation_clock.clone(), config_.cursor.shake_to_find);
 
         let mod_key = backend.mod_key(&config.borrow());
         let mods_with_mouse_binds = mods_with_mouse_binds(mod_key, &config_.binds);
@@ -2858,6 +2865,7 @@ impl Niri {
             configured_keymap: None,
             cursor_manager,
             cursor_texture_cache: Default::default(),
+            cursor_shake,
             cursor_shape_manager_state,
             dnd_icon: None,
             pointer_contents: PointContents::default(),
@@ -4007,6 +4015,56 @@ impl Niri {
 
         let output_scale = Scale::from(output.current_scale().fractional_scale());
 
+        // The mouse was shaken: draw the theme's arrow, big. Like KWin, the arrow replaces
+        // whatever the cursor is, and it is loaded at a bigger size so that it stays sharp.
+        // A hidden cursor stays hidden (a game hiding it must not get a big arrow).
+        let magnification = self.cursor_shake.magnification();
+        let render_cursor = if magnification > 1. && !matches!(render_cursor, RenderCursor::Hidden)
+        {
+            let load_scale = cursor_scale * self.cursor_shake.load_scale();
+            let cursor = self.cursor_manager.get_default_cursor(load_scale);
+            let (idx, frame) = cursor.frame(self.start_time.elapsed().as_millis() as u32);
+
+            // Logical size of one image pixel at the normal cursor size.
+            let k = f64::from(self.cursor_manager.size()) / f64::from(frame.size.max(1));
+            let k = k * magnification;
+            let size = Size::<f64, Logical>::from((
+                f64::from(frame.width) * k,
+                f64::from(frame.height) * k,
+            ));
+            let hotspot =
+                Point::<f64, Logical>::from((f64::from(frame.xhot) * k, f64::from(frame.yhot) * k));
+            let pos = (pointer_pos - hotspot).to_physical_precise_round(output_scale);
+
+            let texture =
+                self.cursor_texture_cache
+                    .get(CursorIcon::Default, load_scale, &cursor, idx);
+            // The whole image as the source: without an explicit `src`, smithay would take a
+            // source as big as the destination and sample past the texture's edge.
+            let src = Rectangle::from_size(Size::<f64, Logical>::from((
+                f64::from(frame.width) / f64::from(load_scale),
+                f64::from(frame.height) / f64::from(load_scale),
+            )));
+            match MemoryRenderBufferRenderElement::from_buffer(
+                renderer,
+                pos,
+                &texture,
+                None,
+                Some(src),
+                Some(size.to_i32_round()),
+                Kind::Cursor,
+            ) {
+                Ok(element) => push(element.into()),
+                Err(err) => {
+                    warn!("error importing the shaken cursor texture: {err:?}");
+                }
+            }
+
+            RenderCursor::Hidden
+        } else {
+            render_cursor
+        };
+
         match render_cursor {
             RenderCursor::Hidden => (),
             RenderCursor::Surface { surface, hotspot } => {
@@ -4894,6 +4952,9 @@ impl Niri {
 
         self.update_render_elements(Some(output));
 
+        // Start shrinking the shaken cursor back once it has been big long enough.
+        self.cursor_shake.advance();
+
         let mut res = RenderResult::Skipped;
         if self.monitors_active {
             let state = self.output_state.get_mut(output).unwrap();
@@ -4909,6 +4970,8 @@ impl Niri {
             state.unfinished_animations_remain |= self
                 .cursor_manager
                 .is_current_cursor_animated(output.current_scale().integer_scale());
+            // …or shaken and big.
+            state.unfinished_animations_remain |= self.cursor_shake.is_active();
 
             // Also check layer surfaces.
             if !state.unfinished_animations_remain {
