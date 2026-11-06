@@ -40,6 +40,12 @@ pub struct XrayPos {
 
     /// Zoom factor between backdrop coordinates and geometry.
     pub zoom: f64,
+
+    /// Whether this is drawn into an offscreen buffer rather than onto the output.
+    ///
+    /// A non-xray effect reads what's already in the framebuffer, and an offscreen buffer is
+    /// empty, so it would show nothing. Such surfaces use xray until they're back on the output.
+    pub offscreen: bool,
 }
 
 impl XrayPos {
@@ -47,7 +53,13 @@ impl XrayPos {
         Self {
             pos_in_backdrop: pos_in_backdrop.downscale(zoom),
             zoom,
+            offscreen: false,
         }
+    }
+
+    pub fn offscreen(mut self) -> Self {
+        self.offscreen = true;
+        self
     }
 
     pub fn offset(mut self, offset: Point<f64, Logical>) -> Self {
@@ -61,6 +73,7 @@ impl Default for XrayPos {
         Self {
             pos_in_backdrop: Point::new(0., 0.),
             zoom: 1.,
+            offscreen: false,
         }
     }
 }

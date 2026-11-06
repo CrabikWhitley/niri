@@ -180,7 +180,7 @@ impl BackgroundEffect {
         };
         let saturation = self.options.saturation.unwrap_or(saturation) as f32;
 
-        if self.options.xray {
+        if self.options.xray || xray_pos.offscreen {
             let Some(xray) = ctx.xray else {
                 return;
             };

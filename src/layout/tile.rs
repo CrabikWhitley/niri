@@ -1382,7 +1382,7 @@ impl<W: LayoutElement> Tile<W> {
             self.render_inner(
                 ctx.r(),
                 Point::new(0., 0.),
-                xray_pos,
+                xray_pos.offscreen(),
                 focus_ring,
                 &mut |elem| elements.push(elem),
             );
@@ -1409,7 +1409,7 @@ impl<W: LayoutElement> Tile<W> {
             self.render_inner(
                 ctx.r(),
                 Point::new(0., 0.),
-                xray_pos,
+                xray_pos.offscreen(),
                 focus_ring,
                 &mut |elem| elements.push(elem),
             );
@@ -1456,6 +1456,9 @@ impl<W: LayoutElement> Tile<W> {
         xray_pos: XrayPos,
     ) -> TileRenderSnapshot {
         let _span = tracy_client::span!("Tile::render_snapshot");
+
+        // The snapshot goes to a texture, which has nothing in it for a non-xray effect to read.
+        let xray_pos = xray_pos.offscreen();
 
         let mut contents = Vec::new();
         self.render(
