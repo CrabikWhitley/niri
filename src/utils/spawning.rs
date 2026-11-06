@@ -156,6 +156,17 @@ fn spawn_sync(
 
     unsafe { process.pre_exec(crate::utils::signals::unblock_all) };
 
+    // The compositor may run with a raised priority (ananicy-cpp and game modes do this). Programs
+    // shouldn't inherit it: if everything is raised, then nothing is.
+    unsafe {
+        process.pre_exec(|| {
+            if libc::getpriority(libc::PRIO_PROCESS, 0) < 0 {
+                libc::setpriority(libc::PRIO_PROCESS, 0, 0);
+            }
+            Ok(())
+        })
+    };
+
     let Some(mut child) = do_spawn(command, process) else {
         return;
     };
