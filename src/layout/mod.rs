@@ -4266,6 +4266,15 @@ impl<W: LayoutElement> Layout<W> {
                 active_monitor_idx,
                 ..
             } => {
+                let other_outputs: Vec<_> = monitors
+                    .iter()
+                    .filter(|mon| mon.output != move_.output)
+                    .map(|mon| {
+                        let loc = mon.output.current_location().to_f64();
+                        Rectangle::new(loc, output_size(&mon.output))
+                    })
+                    .collect();
+
                 let (mon, insert_ws, position, offset, zoom) =
                     if let Some(mon) = monitors.iter_mut().find(|mon| mon.output == move_.output) {
                         let zoom = mon.overview_zoom();
@@ -4368,7 +4377,22 @@ impl<W: LayoutElement> Layout<W> {
                         match insert_ws {
                             InsertWorkspace::Existing(_) => {
                                 if let Some(offset) = offset {
-                                    let pos = (tile_render_loc - offset).downscale(zoom);
+                                    let mut pos = (tile_render_loc - offset).downscale(zoom);
+
+                                    // A window lives on one output, so the part hanging over a
+                                    // neighbouring monitor would vanish on drop. Slide it fully
+                                    // onto the monitor it was dropped on. Outer screen edges stay
+                                    // free: hiding a window partly past them is a normal thing.
+                                    if zoom == 1. {
+                                        let size = tile.animated_tile_size();
+                                        let loc = mon.output.current_location().to_f64();
+                                        let global = Rectangle::new(loc + pos, size);
+                                        if other_outputs.iter().any(|rect| rect.overlaps(global)) {
+                                            pos = mon.workspaces[ws_idx]
+                                                .clamp_within_floating_area(pos, size);
+                                        }
+                                    }
+
                                     let pos =
                                         mon.workspaces[ws_idx].floating_logical_to_size_frac(pos);
                                     tile.floating_pos = Some(pos);

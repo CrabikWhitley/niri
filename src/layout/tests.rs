@@ -4163,3 +4163,90 @@ proptest! {
         check_ops_with_options(options, ops);
     }
 }
+
+/// Where the window's tile is drawn, in its output's coordinates.
+fn floating_tile_rect(layout: &Layout<TestWindow>, id: usize) -> Rectangle<f64, Logical> {
+    for mon in layout.monitors() {
+        for ws in &mon.workspaces {
+            for (tile, pos, _) in ws.tiles_with_render_positions() {
+                if *tile.window().id() == id {
+                    return Rectangle::new(pos, tile.animated_tile_size());
+                }
+            }
+        }
+    }
+    panic!("window {id} not found");
+}
+
+/// Two monitors side by side and a floating window, dragged so that it ends up at `target_x`.
+fn drop_floating_window_at(second_output: bool, target_x: f64) -> Rectangle<f64, Logical> {
+    let mut layout = Layout::default();
+    let mut ops = vec![Op::AddOutput(1)];
+    if second_output {
+        ops.push(Op::AddOutput(2));
+    }
+    ops.push(Op::AddWindow {
+        params: TestWindowParams {
+            is_floating: true,
+            ..TestWindowParams::new(1)
+        },
+    });
+    check_ops_on_layout(&mut layout, ops);
+
+    if second_output {
+        let output = layout.outputs().find(|o| o.name() == "output2").unwrap();
+        output.change_current_state(None, None, None, Some(Point::from((1280, 0))));
+    }
+
+    let start = floating_tile_rect(&layout, 1).loc;
+    check_ops_on_layout(
+        &mut layout,
+        [
+            Op::InteractiveMoveBegin {
+                window: 1,
+                output_idx: 1,
+                px: start.x + 10.,
+                py: start.y + 10.,
+            },
+            Op::InteractiveMoveUpdate {
+                window: 1,
+                dx: target_x - start.x,
+                dy: 0.,
+                output_idx: 1,
+                px: target_x + 10.,
+                py: start.y + 10.,
+            },
+            Op::CompleteAnimations,
+        ],
+    );
+
+    // Make sure the test really drags the window over the edge.
+    let Some(InteractiveMoveState::Moving(move_)) = &layout.interactive_move else {
+        panic!("the window should be moving");
+    };
+    assert_eq!(move_.tile_render_location(1.).x, target_x);
+
+    check_ops_on_layout(
+        &mut layout,
+        [Op::InteractiveMoveEnd { window: 1 }, Op::CompleteAnimations],
+    );
+    floating_tile_rect(&layout, 1)
+}
+
+#[test]
+fn floating_drop_over_a_neighbouring_output_slides_back() {
+    let rect = drop_floating_window_at(true, 1250.);
+    assert!(
+        rect.loc.x + rect.size.w <= 1280.,
+        "the window must fit on its output, but it's at {rect:?}"
+    );
+}
+
+#[test]
+fn floating_drop_past_an_outer_screen_edge_stays_put() {
+    let rect = drop_floating_window_at(false, 1250.);
+    assert!(
+        rect.loc.x + rect.size.w > 1280.,
+        "nothing's there to hide behind, the window should stay at {rect:?}"
+    );
+}

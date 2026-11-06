@@ -2002,6 +2002,14 @@ impl<W: LayoutElement> Workspace<W> {
         self.floating_is_active.get()
     }
 
+    pub fn clamp_within_floating_area(
+        &self,
+        pos: Point<f64, Logical>,
+        size: Size<f64, Logical>,
+    ) -> Point<f64, Logical> {
+        self.floating.clamp_within_working_area(pos, size)
+    }
+
     pub fn floating_logical_to_size_frac(
         &self,
         logical_pos: Point<f64, Logical>,
